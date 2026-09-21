@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,21 +25,54 @@ type testAPI struct {
 	sku     string
 }
 
+var (
+	testPoolOnce sync.Once
+	testPool     *pgxpool.Pool
+	testPoolErr  error
+)
+
+// sharedPool returns one connection pool used by every test, with all of its
+// connections already open. This matters for the concurrency tests: opening a
+// connection takes milliseconds, so with a cold pool "simultaneous" requests would
+// actually reach Postgres one after another and never really race.
+func sharedPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	testPoolOnce.Do(func() {
+		ctx := context.Background()
+		url := os.Getenv("DATABASE_URL")
+		if url == "" {
+			url = defaultDatabaseURL
+		}
+		pool, err := pgxpool.New(ctx, url)
+		if err != nil {
+			testPoolErr = err
+			return
+		}
+		// Hold every connection at the same time so the pool has to open them all.
+		var conns []*pgxpool.Conn
+		for range pool.Config().MaxConns {
+			c, err := pool.Acquire(ctx)
+			if err != nil {
+				testPoolErr = err
+				break
+			}
+			conns = append(conns, c)
+		}
+		for _, c := range conns {
+			c.Release()
+		}
+		testPool = pool
+	})
+	if testPoolErr != nil {
+		t.Skipf("database not reachable (run `docker compose up -d`): %v", testPoolErr)
+	}
+	return testPool
+}
+
 func newTestAPI(t *testing.T, initialStock int) *testAPI {
 	t.Helper()
 	ctx := context.Background()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
-		url = defaultDatabaseURL
-	}
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skipf("database not reachable (run `docker compose up -d`): %v", err)
-	}
+	pool := sharedPool(t)
 
 	sku := fmt.Sprintf("TEST-%s-%d", strings.ReplaceAll(t.Name(), "/", "-"), time.Now().UnixNano())
 	if _, err := pool.Exec(ctx,
@@ -49,21 +83,30 @@ func newTestAPI(t *testing.T, initialStock int) *testAPI {
 	t.Cleanup(func() {
 		pool.Exec(ctx, `DELETE FROM reservations WHERE sku = $1`, sku)
 		pool.Exec(ctx, `DELETE FROM stock WHERE sku = $1`, sku)
-		pool.Close()
 	})
 	return &testAPI{t: t, pool: pool, handler: (&server{pool: pool}).routes(), sku: sku}
 }
 
-// do sends a request and returns the status and decoded JSON body.
-func (a *testAPI) do(method, path, body string) (int, map[string]any) {
-	a.t.Helper()
+// request sends a request and returns the status and decoded JSON body.
+// It never touches testing.T, so it is safe to call from many goroutines at once.
+func (a *testAPI) request(method, path, body string) (int, map[string]any, error) {
 	rec := httptest.NewRecorder()
 	a.handler.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
 	var out map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		a.t.Fatalf("%s %s: body is not JSON: %q", method, path, rec.Body.String())
+		return rec.Code, nil, fmt.Errorf("%s %s: body is not JSON: %q", method, path, rec.Body.String())
 	}
-	return rec.Code, out
+	return rec.Code, out, nil
+}
+
+// do is request for single-goroutine tests: it fails the test on a malformed response.
+func (a *testAPI) do(method, path, body string) (int, map[string]any) {
+	a.t.Helper()
+	code, out, err := a.request(method, path, body)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	return code, out
 }
 
 func (a *testAPI) reserve() string {
@@ -123,6 +166,8 @@ func wantError(t *testing.T, what string, code, wantCode int, body map[string]an
 	}
 }
 
+// Happy path to a sale: reserving moves one unit available -> reserved,
+// and confirming moves it reserved -> sold.
 func TestReserveThenConfirm(t *testing.T) {
 	a := newTestAPI(t, 10)
 	a.wantInventory(10, 0, 0)
@@ -138,6 +183,8 @@ func TestReserveThenConfirm(t *testing.T) {
 	a.wantInventory(9, 0, 1)
 }
 
+// Happy path to a cancel: reserving holds a unit, abandoning puts it back,
+// so the stock ends exactly where it started.
 func TestReserveThenAbandon(t *testing.T) {
 	a := newTestAPI(t, 10)
 	id := a.reserve()
@@ -151,6 +198,8 @@ func TestReserveThenAbandon(t *testing.T) {
 	a.wantInventory(10, 0, 0)
 }
 
+// The reserve response carries the SKU and a deadline about one hold window
+// (5 minutes) in the future.
 func TestReserveResponse(t *testing.T) {
 	a := newTestAPI(t, 1)
 	before := time.Now()
@@ -169,6 +218,8 @@ func TestReserveResponse(t *testing.T) {
 	}
 }
 
+// With 3 units, the first 3 reserves succeed and the 4th is refused with
+// 409 out_of_stock without changing any counter.
 func TestReserveUntilOutOfStock(t *testing.T) {
 	a := newTestAPI(t, 3)
 	for range 3 {
@@ -181,6 +232,8 @@ func TestReserveUntilOutOfStock(t *testing.T) {
 	a.wantInventory(0, 3, 0)
 }
 
+// A unit that was abandoned really is back on the shelf: with stock 1,
+// reserve -> abandon -> reserve succeeds the second time.
 func TestAbandonedUnitCanBeReservedAgain(t *testing.T) {
 	a := newTestAPI(t, 1)
 	id := a.reserve()
@@ -189,6 +242,8 @@ func TestAbandonedUnitCanBeReservedAgain(t *testing.T) {
 	a.wantInventory(0, 1, 0)
 }
 
+// Once a reservation is confirmed or abandoned it is final. Any second
+// confirm/abandon gets 409 and must not move a unit again (the double-move bug).
 func TestFinishedReservationCannotBeFinishedAgain(t *testing.T) {
 	cases := []struct{ first, second string }{
 		{"confirm", "confirm"},
@@ -215,6 +270,7 @@ func TestFinishedReservationCannotBeFinishedAgain(t *testing.T) {
 	}
 }
 
+// Unknown SKUs and unknown reservation ids get 404, and nothing changes.
 func TestNotFound(t *testing.T) {
 	a := newTestAPI(t, 1)
 
@@ -232,6 +288,8 @@ func TestNotFound(t *testing.T) {
 	a.wantInventory(1, 0, 0)
 }
 
+// Broken JSON, missing fields, and ids that are not UUIDs get 400,
+// and nothing changes.
 func TestInvalidRequest(t *testing.T) {
 	a := newTestAPI(t, 1)
 	requests := []struct{ path, body string }{
