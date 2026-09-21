@@ -1,0 +1,249 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"stocklock/internal/invariant"
+)
+
+// testAPI drives the real handlers against the real database, using a SKU of its own.
+type testAPI struct {
+	t       *testing.T
+	pool    *pgxpool.Pool
+	handler http.Handler
+	sku     string
+}
+
+func newTestAPI(t *testing.T, initialStock int) *testAPI {
+	t.Helper()
+	ctx := context.Background()
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		url = defaultDatabaseURL
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		t.Skipf("database not reachable (run `docker compose up -d`): %v", err)
+	}
+
+	sku := fmt.Sprintf("TEST-%s-%d", strings.ReplaceAll(t.Name(), "/", "-"), time.Now().UnixNano())
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO stock (sku, initial_stock, available, reserved, sold) VALUES ($1, $2, $2, 0, 0)`,
+		sku, initialStock); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM reservations WHERE sku = $1`, sku)
+		pool.Exec(ctx, `DELETE FROM stock WHERE sku = $1`, sku)
+		pool.Close()
+	})
+	return &testAPI{t: t, pool: pool, handler: (&server{pool: pool}).routes(), sku: sku}
+}
+
+// do sends a request and returns the status and decoded JSON body.
+func (a *testAPI) do(method, path, body string) (int, map[string]any) {
+	a.t.Helper()
+	rec := httptest.NewRecorder()
+	a.handler.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		a.t.Fatalf("%s %s: body is not JSON: %q", method, path, rec.Body.String())
+	}
+	return rec.Code, out
+}
+
+func (a *testAPI) reserve() string {
+	a.t.Helper()
+	code, body := a.do("POST", "/reserve", fmt.Sprintf(`{"sku":%q}`, a.sku))
+	if code != http.StatusCreated {
+		a.t.Fatalf("reserve: status %d, body %v", code, body)
+	}
+	return body["reservation_id"].(string)
+}
+
+func (a *testAPI) finish(action, reservationID string) (int, map[string]any) {
+	a.t.Helper()
+	return a.do("POST", "/"+action, fmt.Sprintf(`{"reservation_id":%q}`, reservationID))
+}
+
+// wantInventory checks GET /inventory and then that every invariant holds for the SKU.
+func (a *testAPI) wantInventory(available, reserved, sold int) {
+	a.t.Helper()
+	code, body := a.do("GET", "/inventory/"+a.sku, "")
+	if code != http.StatusOK {
+		a.t.Fatalf("inventory: status %d, body %v", code, body)
+	}
+	got := [3]int{int(body["available"].(float64)), int(body["reserved"].(float64)), int(body["sold"].(float64))}
+	if want := [3]int{available, reserved, sold}; got != want {
+		a.t.Errorf("available/reserved/sold = %v, want %v", got, want)
+	}
+
+	ctx := context.Background()
+	tx, err := a.pool.Begin(ctx)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	vs, _, err := invariant.Check(ctx, tx)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	for _, v := range vs {
+		if v.SKU == a.sku {
+			a.t.Errorf("invariant violated: %s: %s", v.Kind, v.Detail)
+		}
+	}
+}
+
+func wantStatus(t *testing.T, what string, got, want int, body map[string]any) {
+	t.Helper()
+	if got != want {
+		t.Errorf("%s: status %d, want %d (body %v)", what, got, want, body)
+	}
+}
+
+func wantError(t *testing.T, what string, code, wantCode int, body map[string]any, wantErr string) {
+	t.Helper()
+	if code != wantCode || body["error"] != wantErr {
+		t.Errorf("%s: got %d %v, want %d %q", what, code, body, wantCode, wantErr)
+	}
+}
+
+func TestReserveThenConfirm(t *testing.T) {
+	a := newTestAPI(t, 10)
+	a.wantInventory(10, 0, 0)
+
+	id := a.reserve()
+	a.wantInventory(9, 1, 0)
+
+	code, body := a.finish("confirm", id)
+	wantStatus(t, "confirm", code, http.StatusOK, body)
+	if body["state"] != "CONFIRMED" || body["reservation_id"] != id {
+		t.Errorf("confirm body = %v", body)
+	}
+	a.wantInventory(9, 0, 1)
+}
+
+func TestReserveThenAbandon(t *testing.T) {
+	a := newTestAPI(t, 10)
+	id := a.reserve()
+	a.wantInventory(9, 1, 0)
+
+	code, body := a.finish("abandon", id)
+	wantStatus(t, "abandon", code, http.StatusOK, body)
+	if body["state"] != "ABANDONED" {
+		t.Errorf("abandon body = %v", body)
+	}
+	a.wantInventory(10, 0, 0)
+}
+
+func TestReserveResponse(t *testing.T) {
+	a := newTestAPI(t, 1)
+	before := time.Now()
+	code, body := a.do("POST", "/reserve", fmt.Sprintf(`{"sku":%q}`, a.sku))
+	wantStatus(t, "reserve", code, http.StatusCreated, body)
+	if body["sku"] != a.sku {
+		t.Errorf("sku = %v, want %s", body["sku"], a.sku)
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, body["deadline"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Generous bounds: the deadline comes from the database clock, not this process.
+	if d := deadline.Sub(before); d < holdWindow-time.Minute || d > holdWindow+time.Minute {
+		t.Errorf("deadline is %v after the request, want about %v", d, holdWindow)
+	}
+}
+
+func TestReserveUntilOutOfStock(t *testing.T) {
+	a := newTestAPI(t, 3)
+	for range 3 {
+		a.reserve()
+	}
+	a.wantInventory(0, 3, 0)
+
+	code, body := a.do("POST", "/reserve", fmt.Sprintf(`{"sku":%q}`, a.sku))
+	wantError(t, "4th reserve", code, http.StatusConflict, body, "out_of_stock")
+	a.wantInventory(0, 3, 0)
+}
+
+func TestAbandonedUnitCanBeReservedAgain(t *testing.T) {
+	a := newTestAPI(t, 1)
+	id := a.reserve()
+	a.finish("abandon", id)
+	a.reserve()
+	a.wantInventory(0, 1, 0)
+}
+
+func TestFinishedReservationCannotBeFinishedAgain(t *testing.T) {
+	cases := []struct{ first, second string }{
+		{"confirm", "confirm"},
+		{"confirm", "abandon"},
+		{"abandon", "abandon"},
+		{"abandon", "confirm"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.first+" then "+tc.second, func(t *testing.T) {
+			a := newTestAPI(t, 10)
+			id := a.reserve()
+			code, body := a.finish(tc.first, id)
+			wantStatus(t, tc.first, code, http.StatusOK, body)
+
+			code, body = a.finish(tc.second, id)
+			wantError(t, "second "+tc.second, code, http.StatusConflict, body, "reservation_not_reserved")
+
+			if tc.first == "confirm" {
+				a.wantInventory(9, 0, 1)
+			} else {
+				a.wantInventory(10, 0, 0)
+			}
+		})
+	}
+}
+
+func TestNotFound(t *testing.T) {
+	a := newTestAPI(t, 1)
+
+	code, body := a.do("POST", "/reserve", `{"sku":"NO-SUCH-SKU"}`)
+	wantError(t, "reserve", code, http.StatusNotFound, body, "sku_not_found")
+
+	code, body = a.do("GET", "/inventory/NO-SUCH-SKU", "")
+	wantError(t, "inventory", code, http.StatusNotFound, body, "sku_not_found")
+
+	const unknownID = "00000000-0000-0000-0000-000000000000"
+	for _, action := range []string{"confirm", "abandon"} {
+		code, body = a.finish(action, unknownID)
+		wantError(t, action, code, http.StatusNotFound, body, "reservation_not_found")
+	}
+	a.wantInventory(1, 0, 0)
+}
+
+func TestInvalidRequest(t *testing.T) {
+	a := newTestAPI(t, 1)
+	requests := []struct{ path, body string }{
+		{"/reserve", `not json`},
+		{"/reserve", `{}`},
+		{"/confirm", `{}`},
+		{"/confirm", `{"reservation_id":"not-a-uuid"}`},
+		{"/abandon", `{"reservation_id":"not-a-uuid"}`},
+	}
+	for _, r := range requests {
+		code, body := a.do("POST", r.path, r.body)
+		wantError(t, r.path+" "+r.body, code, http.StatusBadRequest, body, "invalid_request")
+	}
+	a.wantInventory(1, 0, 0)
+}
