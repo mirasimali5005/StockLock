@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: stocklock
+      POSTGRES_PASSWORD: stocklock
+      POSTGRES_DB: stocklock
+    ports:
+      - "5432:5432"
+    volumes:
+      # Init scripts run only when the data directory is first created.
+      # `docker compose down -v` wipes it so they run again.
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
