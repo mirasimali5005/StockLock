@@ -87,7 +87,8 @@ func newTestAPI(t *testing.T, initialStock int) *testAPI {
 		pool.Exec(ctx, `DELETE FROM reservations WHERE sku = $1`, sku)
 		pool.Exec(ctx, `DELETE FROM stock WHERE sku = $1`, sku)
 	})
-	return &testAPI{t: t, pool: pool, handler: (&server{pool: pool}).routes(), sku: sku}
+	return &testAPI{t: t, pool: pool, sku: sku,
+		handler: (&server{pool: pool, holdWindow: defaultHoldWindow}).routes()}
 }
 
 // request sends a request and returns the status and decoded JSON body.
@@ -232,8 +233,8 @@ func TestReserveResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Generous bounds: the deadline comes from the database clock, not this process.
-	if d := deadline.Sub(before); d < holdWindow-time.Minute || d > holdWindow+time.Minute {
-		t.Errorf("deadline is %v after the request, want about %v", d, holdWindow)
+	if d := deadline.Sub(before); d < defaultHoldWindow-time.Minute || d > defaultHoldWindow+time.Minute {
+		t.Errorf("deadline is %v after the request, want about %v", d, defaultHoldWindow)
 	}
 }
 

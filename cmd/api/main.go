@@ -19,8 +19,8 @@ const (
 	defaultDatabaseURL = "postgres://stocklock:stocklock@localhost:5432/stocklock"
 	listenAddr         = ":8080"
 
-	// holdWindow is written into each reservation's deadline. Nothing enforces the deadline yet.
-	holdWindow = 5 * time.Minute
+	// defaultHoldWindow is how long a reservation stays valid unless HOLD_WINDOW says otherwise.
+	defaultHoldWindow = 5 * time.Minute
 )
 
 // Definite answers. Each is a final, repeatable outcome of an operation, so it is
@@ -31,6 +31,7 @@ var (
 	errOutOfStock          = errors.New("out_of_stock")
 	errReservationNotFound = errors.New("reservation_not_found")
 	errNotReserved         = errors.New("reservation_not_reserved")
+	errExpired             = errors.New("reservation_expired")
 )
 
 // errOperationReuse means an operation_id arrived again with a different request.
@@ -41,14 +42,15 @@ func definiteStatus(err error) (int, bool) {
 	switch {
 	case errors.Is(err, errSKUNotFound), errors.Is(err, errReservationNotFound):
 		return http.StatusNotFound, true
-	case errors.Is(err, errOutOfStock), errors.Is(err, errNotReserved):
+	case errors.Is(err, errOutOfStock), errors.Is(err, errNotReserved), errors.Is(err, errExpired):
 		return http.StatusConflict, true
 	}
 	return 0, false
 }
 
 type server struct {
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	holdWindow time.Duration
 }
 
 func (s *server) routes() http.Handler {
@@ -135,7 +137,7 @@ type reservation struct {
 // reserve is deliberately the straightforward version: lock the stock row, read it,
 // decide in application code, then write. Each step is its own round trip, all made
 // while the row lock is held.
-func reserve(ctx context.Context, tx pgx.Tx, sku string) (reservation, error) {
+func reserve(ctx context.Context, tx pgx.Tx, sku string, holdWindow time.Duration) (reservation, error) {
 	var available int
 	err := tx.QueryRow(ctx, `SELECT available FROM stock WHERE sku = $1 FOR UPDATE`, sku).Scan(&available)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -168,8 +170,13 @@ const (
 	abandonStockSQL = `UPDATE stock SET reserved = reserved - 1, available = available + 1 WHERE sku = $1`
 )
 
-// finish moves a RESERVED reservation to newState and moves its unit with stockSQL.
-// Lock order is always reservation row, then stock row.
+// finish moves a RESERVED, unexpired reservation to newState and moves its unit with
+// stockSQL. Lock order is always reservation row, then stock row.
+//
+// The deadline is checked with clock_timestamp(), the real current time, and only
+// after the row lock is held. now() would be wrong here: it is frozen at transaction
+// start, so a request that started before the deadline but waited on the lock past
+// it would still be allowed through.
 func finish(ctx context.Context, tx pgx.Tx, id pgtype.UUID, newState, stockSQL string) error {
 	var sku, state string
 	err := tx.QueryRow(ctx,
@@ -184,10 +191,16 @@ func finish(ctx context.Context, tx pgx.Tx, id pgtype.UUID, newState, stockSQL s
 		return errNotReserved
 	}
 
-	if _, err := tx.Exec(ctx, stockSQL, sku); err != nil {
+	updated, err := tx.Exec(ctx,
+		`UPDATE reservations SET state = $2
+		 WHERE reservation_id = $1 AND deadline > clock_timestamp()`, id, newState)
+	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE reservations SET state = $2 WHERE reservation_id = $1`, id, newState)
+	if updated.RowsAffected() == 0 {
+		return errExpired
+	}
+	_, err = tx.Exec(ctx, stockSQL, sku)
 	return err
 }
 
@@ -202,7 +215,7 @@ func (s *server) handleReserve(w http.ResponseWriter, r *http.Request) {
 	}
 	op := operation{id: req.OperationID, kind: "RESERVE", request: req.SKU}
 	status, body, err := s.runOnce(r.Context(), op, http.StatusCreated, func(tx pgx.Tx) (any, error) {
-		return reserve(r.Context(), tx, req.SKU)
+		return reserve(r.Context(), tx, req.SKU, s.holdWindow)
 	})
 	writeOutcome(w, status, body, err)
 }
@@ -289,6 +302,13 @@ func main() {
 	if url == "" {
 		url = defaultDatabaseURL
 	}
+	holdWindow := defaultHoldWindow
+	if v := os.Getenv("HOLD_WINDOW"); v != "" {
+		var err error
+		if holdWindow, err = time.ParseDuration(v); err != nil || holdWindow <= 0 {
+			log.Fatalf("HOLD_WINDOW %q: want a positive duration such as 5m or 2s", v)
+		}
+	}
 	pool, err := pgxpool.New(context.Background(), url)
 	if err != nil {
 		log.Fatal(err)
@@ -298,6 +318,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Printf("listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, (&server{pool: pool}).routes()))
+	log.Printf("listening on %s, hold window %v", listenAddr, holdWindow)
+	log.Fatal(http.ListenAndServe(listenAddr, (&server{pool: pool, holdWindow: holdWindow}).routes()))
 }
