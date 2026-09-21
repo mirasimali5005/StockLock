@@ -1,4 +1,4 @@
-package main
+package invariant
 
 import (
 	"context"
@@ -17,7 +17,7 @@ func TestCheck(t *testing.T) {
 	ctx := context.Background()
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		url = defaultDatabaseURL
+		url = "postgres://stocklock:stocklock@localhost:5432/stocklock"
 	}
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -44,48 +44,48 @@ func TestCheck(t *testing.T) {
 		{
 			name:   "a unit vanished",
 			counts: counts{9, 0, 0},
-			want:   []string{kindUnitsNotConserved},
+			want:   []string{KindUnitsNotConserved},
 		},
 		{
 			name:   "a unit was created",
 			counts: counts{10, 1, 0},
 			states: []string{"RESERVED"},
-			want:   []string{kindUnitsNotConserved},
+			want:   []string{KindUnitsNotConserved},
 		},
 		{
 			// 11 holds on 10 units. The sum still equals 10, so only the sign check sees it.
 			name:   "oversell",
 			counts: counts{-1, 11, 0},
 			states: slices.Repeat([]string{"RESERVED"}, 11),
-			want:   []string{kindNegativeAvailable},
+			want:   []string{KindNegativeAvailable},
 		},
 		{
 			// One reservation moved two units. The sum still equals 10.
 			name:   "double reserve for one reservation",
 			counts: counts{8, 2, 0},
 			states: []string{"RESERVED"},
-			want:   []string{kindReservedMismatch},
+			want:   []string{KindReservedMismatch},
 		},
 		{
 			// A reservation row was written without moving a unit.
 			name:   "reservation row without a counter change",
 			counts: counts{10, 0, 0},
 			states: []string{"RESERVED"},
-			want:   []string{kindReservedMismatch},
+			want:   []string{KindReservedMismatch},
 		},
 		{
 			// Confirm moved reserved -> sold twice for one reservation.
 			name:   "double confirm for one reservation",
 			counts: counts{8, 0, 2},
 			states: []string{"CONFIRMED"},
-			want:   []string{kindSoldMismatch},
+			want:   []string{KindSoldMismatch},
 		},
 		{
 			// Abandon marked the row but never returned the unit.
 			name:   "abandon did not return the unit",
 			counts: counts{9, 1, 0},
 			states: []string{"ABANDONED"},
-			want:   []string{kindReservedMismatch},
+			want:   []string{KindReservedMismatch},
 		},
 	}
 
@@ -110,14 +110,14 @@ func TestCheck(t *testing.T) {
 				}
 			}
 
-			vs, _, err := check(ctx, tx)
+			vs, _, err := Check(ctx, tx)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var got []string
 			for _, v := range vs {
-				if v.sku == testSKU {
-					got = append(got, v.kind)
+				if v.SKU == testSKU {
+					got = append(got, v.Kind)
 				}
 			}
 			if !slices.Equal(got, tc.want) {
