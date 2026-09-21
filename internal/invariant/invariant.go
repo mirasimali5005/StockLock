@@ -15,6 +15,8 @@ const (
 	KindNegativeAvailable = "NEGATIVE_AVAILABLE"  // available < 0
 	KindReservedMismatch  = "RESERVED_MISMATCH"   // reserved != number of RESERVED reservation rows
 	KindSoldMismatch      = "SOLD_MISMATCH"       // sold != number of CONFIRMED reservation rows
+	// Number of reservation rows != number of successful RESERVE operations.
+	KindOperationMismatch = "OPERATION_MISMATCH"
 )
 
 type Violation struct {
@@ -32,6 +34,8 @@ type skuState struct {
 	sold          int
 	reservedRows  int
 	confirmedRows int
+	totalRows     int // reservation rows in any state
+	reserveOps    int // RESERVE operations that answered 201
 }
 
 // A single statement, so counters and reservation rows come from the same snapshot
@@ -39,10 +43,18 @@ type skuState struct {
 const stateQuery = `
 SELECT s.sku, s.initial_stock, s.available, s.reserved, s.sold,
        COUNT(r.reservation_id) FILTER (WHERE r.state = 'RESERVED'),
-       COUNT(r.reservation_id) FILTER (WHERE r.state = 'CONFIRMED')
+       COUNT(r.reservation_id) FILTER (WHERE r.state = 'CONFIRMED'),
+       COUNT(r.reservation_id),
+       COALESCE(o.successes, 0)
 FROM stock s
 LEFT JOIN reservations r ON r.sku = s.sku
-GROUP BY s.sku
+LEFT JOIN (
+    SELECT request AS sku, COUNT(*) AS successes
+    FROM operations
+    WHERE operation_type = 'RESERVE' AND status_code = 201
+    GROUP BY request
+) o ON o.sku = s.sku
+GROUP BY s.sku, o.successes
 ORDER BY s.sku`
 
 func checkSKU(s skuState) []Violation {
@@ -66,6 +78,10 @@ func checkSKU(s skuState) []Violation {
 		add(KindSoldMismatch, "stock.sold = %d but %d CONFIRMED reservation rows exist",
 			s.sold, s.confirmedRows)
 	}
+	if s.totalRows != s.reserveOps {
+		add(KindOperationMismatch, "%d reservation rows exist but %d RESERVE operations succeeded",
+			s.totalRows, s.reserveOps)
+	}
 	return vs
 }
 
@@ -82,7 +98,7 @@ func Check(ctx context.Context, tx pgx.Tx) ([]Violation, int, error) {
 	for rows.Next() {
 		var s skuState
 		if err := rows.Scan(&s.sku, &s.initialStock, &s.available, &s.reserved, &s.sold,
-			&s.reservedRows, &s.confirmedRows); err != nil {
+			&s.reservedRows, &s.confirmedRows, &s.totalRows, &s.reserveOps); err != nil {
 			return nil, 0, err
 		}
 		skus++

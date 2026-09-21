@@ -23,12 +23,29 @@ const (
 	holdWindow = 5 * time.Minute
 )
 
+// Definite answers. Each is a final, repeatable outcome of an operation, so it is
+// stored with the operation and replayed to retries. Any other error is an internal
+// failure: the transaction rolls back and the operation id stays unused.
 var (
 	errSKUNotFound         = errors.New("sku_not_found")
 	errOutOfStock          = errors.New("out_of_stock")
 	errReservationNotFound = errors.New("reservation_not_found")
 	errNotReserved         = errors.New("reservation_not_reserved")
 )
+
+// errOperationReuse means an operation_id arrived again with a different request.
+var errOperationReuse = errors.New("operation_id_reuse")
+
+// definiteStatus maps a definite answer to its HTTP status.
+func definiteStatus(err error) (int, bool) {
+	switch {
+	case errors.Is(err, errSKUNotFound), errors.Is(err, errReservationNotFound):
+		return http.StatusNotFound, true
+	case errors.Is(err, errOutOfStock), errors.Is(err, errNotReserved):
+		return http.StatusConflict, true
+	}
+	return 0, false
+}
 
 type server struct {
 	pool *pgxpool.Pool
@@ -43,6 +60,72 @@ func (s *server) routes() http.Handler {
 	return mux
 }
 
+// operation identifies one client request: a retry repeats all three fields.
+type operation struct {
+	id      string
+	kind    string // RESERVE, CONFIRM, or ABANDON
+	request string // the SKU for RESERVE, the reservation id otherwise
+}
+
+// runOnce executes mutate at most once per operation id and returns the HTTP status
+// and JSON body to send. The operation row and the inventory change commit in one
+// transaction, so neither can exist without the other.
+//
+// The id is claimed first with INSERT ... ON CONFLICT DO NOTHING. If another
+// transaction is mid-flight with the same id, the insert waits for it: if that one
+// commits we replay its stored answer, and if it rolls back we take over as the
+// first attempt.
+func (s *server) runOnce(ctx context.Context, op operation, successStatus int,
+	mutate func(tx pgx.Tx) (any, error)) (int, []byte, error) {
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	claimed, err := tx.Exec(ctx,
+		`INSERT INTO operations (operation_id, operation_type, request) VALUES ($1, $2, $3)
+		 ON CONFLICT (operation_id) DO NOTHING`, op.id, op.kind, op.request)
+	if err != nil {
+		return 0, nil, err
+	}
+	if claimed.RowsAffected() == 0 {
+		var kind, request string
+		var status int
+		var body []byte
+		if err := tx.QueryRow(ctx,
+			`SELECT operation_type, request, status_code, response FROM operations WHERE operation_id = $1`,
+			op.id).Scan(&kind, &request, &status, &body); err != nil {
+			return 0, nil, err
+		}
+		if kind != op.kind || request != op.request {
+			return 0, nil, errOperationReuse
+		}
+		return status, body, nil
+	}
+
+	status := successStatus
+	result, err := mutate(tx)
+	if err != nil {
+		var definite bool
+		if status, definite = definiteStatus(err); !definite {
+			return 0, nil, err
+		}
+		result = map[string]string{"error": err.Error()}
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE operations SET status_code = $2, response = $3 WHERE operation_id = $1`,
+		op.id, status, body); err != nil {
+		return 0, nil, err
+	}
+	return status, body, tx.Commit(ctx)
+}
+
 type reservation struct {
 	ReservationID string    `json:"reservation_id"`
 	SKU           string    `json:"sku"`
@@ -52,15 +135,9 @@ type reservation struct {
 // reserve is deliberately the straightforward version: lock the stock row, read it,
 // decide in application code, then write. Each step is its own round trip, all made
 // while the row lock is held.
-func (s *server) reserve(ctx context.Context, sku string) (reservation, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return reservation{}, err
-	}
-	defer tx.Rollback(ctx)
-
+func reserve(ctx context.Context, tx pgx.Tx, sku string) (reservation, error) {
 	var available int
-	err = tx.QueryRow(ctx, `SELECT available FROM stock WHERE sku = $1 FOR UPDATE`, sku).Scan(&available)
+	err := tx.QueryRow(ctx, `SELECT available FROM stock WHERE sku = $1 FOR UPDATE`, sku).Scan(&available)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return reservation{}, errSKUNotFound
 	}
@@ -82,10 +159,7 @@ func (s *server) reserve(ctx context.Context, sku string) (reservation, error) {
 		 VALUES ($1, 'RESERVED', now() + $2::interval)
 		 RETURNING reservation_id::text, deadline`,
 		sku, holdWindow).Scan(&r.ReservationID, &r.Deadline)
-	if err != nil {
-		return reservation{}, err
-	}
-	return r, tx.Commit(ctx)
+	return r, err
 }
 
 // Where a held unit goes when its reservation is finished.
@@ -96,15 +170,9 @@ const (
 
 // finish moves a RESERVED reservation to newState and moves its unit with stockSQL.
 // Lock order is always reservation row, then stock row.
-func (s *server) finish(ctx context.Context, id pgtype.UUID, newState, stockSQL string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
+func finish(ctx context.Context, tx pgx.Tx, id pgtype.UUID, newState, stockSQL string) error {
 	var sku, state string
-	err = tx.QueryRow(ctx,
+	err := tx.QueryRow(ctx,
 		`SELECT sku, state FROM reservations WHERE reservation_id = $1 FOR UPDATE`, id).Scan(&sku, &state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errReservationNotFound
@@ -119,51 +187,55 @@ func (s *server) finish(ctx context.Context, id pgtype.UUID, newState, stockSQL 
 	if _, err := tx.Exec(ctx, stockSQL, sku); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE reservations SET state = $2 WHERE reservation_id = $1`, id, newState); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	_, err = tx.Exec(ctx, `UPDATE reservations SET state = $2 WHERE reservation_id = $1`, id, newState)
+	return err
 }
 
 func (s *server) handleReserve(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SKU string `json:"sku"`
+		OperationID string `json:"operation_id"`
+		SKU         string `json:"sku"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SKU == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OperationID == "" || req.SKU == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	res, err := s.reserve(r.Context(), req.SKU)
-	if err != nil {
-		writeFailure(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, res)
+	op := operation{id: req.OperationID, kind: "RESERVE", request: req.SKU}
+	status, body, err := s.runOnce(r.Context(), op, http.StatusCreated, func(tx pgx.Tx) (any, error) {
+		return reserve(r.Context(), tx, req.SKU)
+	})
+	writeOutcome(w, status, body, err)
 }
 
 func (s *server) handleConfirm(w http.ResponseWriter, r *http.Request) {
-	s.handleFinish(w, r, "CONFIRMED", confirmStockSQL)
+	s.handleFinish(w, r, "CONFIRM", "CONFIRMED", confirmStockSQL)
 }
 
 func (s *server) handleAbandon(w http.ResponseWriter, r *http.Request) {
-	s.handleFinish(w, r, "ABANDONED", abandonStockSQL)
+	s.handleFinish(w, r, "ABANDON", "ABANDONED", abandonStockSQL)
 }
 
-func (s *server) handleFinish(w http.ResponseWriter, r *http.Request, newState, stockSQL string) {
+func (s *server) handleFinish(w http.ResponseWriter, r *http.Request, kind, newState, stockSQL string) {
 	var req struct {
+		OperationID   string `json:"operation_id"`
 		ReservationID string `json:"reservation_id"`
 	}
 	var id pgtype.UUID
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || id.Scan(req.ReservationID) != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OperationID == "" ||
+		id.Scan(req.ReservationID) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	if err := s.finish(r.Context(), id, newState, stockSQL); err != nil {
-		writeFailure(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"reservation_id": req.ReservationID, "state": newState})
+	// The canonical text form, so differently written copies of one UUID compare equal.
+	reservationID, _ := id.Value()
+	op := operation{id: req.OperationID, kind: kind, request: reservationID.(string)}
+	status, body, err := s.runOnce(r.Context(), op, http.StatusOK, func(tx pgx.Tx) (any, error) {
+		if err := finish(r.Context(), tx, id, newState, stockSQL); err != nil {
+			return nil, err
+		}
+		return map[string]string{"reservation_id": op.request, "state": newState}, nil
+	})
+	writeOutcome(w, status, body, err)
 }
 
 func (s *server) handleInventory(w http.ResponseWriter, r *http.Request) {
@@ -177,25 +249,28 @@ func (s *server) handleInventory(w http.ResponseWriter, r *http.Request) {
 	err := s.pool.QueryRow(r.Context(),
 		`SELECT available, reserved, sold FROM stock WHERE sku = $1`, inv.SKU).
 		Scan(&inv.Available, &inv.Reserved, &inv.Sold)
-	if errors.Is(err, pgx.ErrNoRows) {
-		err = errSKUNotFound
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		writeError(w, http.StatusNotFound, errSKUNotFound.Error())
+	case err != nil:
+		writeOutcome(w, 0, nil, err)
+	default:
+		writeJSON(w, http.StatusOK, inv)
 	}
-	if err != nil {
-		writeFailure(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, inv)
 }
 
-func writeFailure(w http.ResponseWriter, err error) {
+// writeOutcome sends what runOnce decided: a first or replayed answer, or a failure.
+func writeOutcome(w http.ResponseWriter, status int, body []byte, err error) {
 	switch {
-	case errors.Is(err, errSKUNotFound), errors.Is(err, errReservationNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, errOutOfStock), errors.Is(err, errNotReserved):
-		writeError(w, http.StatusConflict, err.Error())
-	default:
+	case errors.Is(err, errOperationReuse):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case err != nil:
 		log.Printf("internal error: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error")
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write(body)
 	}
 }
 

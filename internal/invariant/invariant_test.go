@@ -2,6 +2,7 @@ package invariant
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"testing"
@@ -30,7 +31,10 @@ func TestCheck(t *testing.T) {
 		name   string
 		counts counts
 		states []string // one reservation row per entry
-		want   []string
+		// Successful RESERVE operations recorded = len(states) + opsDelta.
+		// Zero means every reservation row is explained by exactly one operation.
+		opsDelta int
+		want     []string
 	}{
 		{
 			name:   "untouched stock is consistent",
@@ -87,6 +91,23 @@ func TestCheck(t *testing.T) {
 			states: []string{"ABANDONED"},
 			want:   []string{KindReservedMismatch},
 		},
+		{
+			// The retry bug: one operation id produced two reservations. Counters and
+			// rows agree with each other (8/2/0, two RESERVED rows), so only the
+			// operation count exposes it.
+			name:     "one operation reserved twice",
+			counts:   counts{8, 2, 0},
+			states:   []string{"RESERVED", "RESERVED"},
+			opsDelta: -1,
+			want:     []string{KindOperationMismatch},
+		},
+		{
+			// An operation was answered 201 but its reservation does not exist.
+			name:     "successful operation without a reservation",
+			counts:   counts{10, 0, 0},
+			opsDelta: 1,
+			want:     []string{KindOperationMismatch},
+		},
 	}
 
 	for _, tc := range cases {
@@ -106,6 +127,15 @@ func TestCheck(t *testing.T) {
 				if _, err := tx.Exec(ctx,
 					`INSERT INTO reservations (sku, state, deadline) VALUES ($1, $2, now() + interval '5 minutes')`,
 					testSKU, state); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			for i := range len(tc.states) + tc.opsDelta {
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO operations (operation_id, operation_type, request, status_code, response)
+					 VALUES ($1, 'RESERVE', $2, 201, '{}')`,
+					fmt.Sprintf("%s-op-%d", testSKU, i), testSKU); err != nil {
 					t.Fatal(err)
 				}
 			}

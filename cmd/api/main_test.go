@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,6 +82,8 @@ func newTestAPI(t *testing.T, initialStock int) *testAPI {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM operations WHERE request = $1
+			OR request IN (SELECT reservation_id::text FROM reservations WHERE sku = $1)`, sku)
 		pool.Exec(ctx, `DELETE FROM reservations WHERE sku = $1`, sku)
 		pool.Exec(ctx, `DELETE FROM stock WHERE sku = $1`, sku)
 	})
@@ -109,9 +112,25 @@ func (a *testAPI) do(method, path, body string) (int, map[string]any) {
 	return code, out
 }
 
+var opCounter atomic.Int64
+
+// newOpID returns an operation id nobody has used before, i.e. a brand-new request
+// rather than a retry.
+func newOpID() string {
+	return fmt.Sprintf("op-%d-%d", time.Now().UnixNano(), opCounter.Add(1))
+}
+
+func reserveBody(opID, sku string) string {
+	return fmt.Sprintf(`{"operation_id":%q,"sku":%q}`, opID, sku)
+}
+
+func finishBody(opID, reservationID string) string {
+	return fmt.Sprintf(`{"operation_id":%q,"reservation_id":%q}`, opID, reservationID)
+}
+
 func (a *testAPI) reserve() string {
 	a.t.Helper()
-	code, body := a.do("POST", "/reserve", fmt.Sprintf(`{"sku":%q}`, a.sku))
+	code, body := a.do("POST", "/reserve", reserveBody(newOpID(), a.sku))
 	if code != http.StatusCreated {
 		a.t.Fatalf("reserve: status %d, body %v", code, body)
 	}
@@ -120,7 +139,7 @@ func (a *testAPI) reserve() string {
 
 func (a *testAPI) finish(action, reservationID string) (int, map[string]any) {
 	a.t.Helper()
-	return a.do("POST", "/"+action, fmt.Sprintf(`{"reservation_id":%q}`, reservationID))
+	return a.do("POST", "/"+action, finishBody(newOpID(), reservationID))
 }
 
 // wantInventory checks GET /inventory and then that every invariant holds for the SKU.
@@ -203,7 +222,7 @@ func TestReserveThenAbandon(t *testing.T) {
 func TestReserveResponse(t *testing.T) {
 	a := newTestAPI(t, 1)
 	before := time.Now()
-	code, body := a.do("POST", "/reserve", fmt.Sprintf(`{"sku":%q}`, a.sku))
+	code, body := a.do("POST", "/reserve", reserveBody(newOpID(), a.sku))
 	wantStatus(t, "reserve", code, http.StatusCreated, body)
 	if body["sku"] != a.sku {
 		t.Errorf("sku = %v, want %s", body["sku"], a.sku)
@@ -227,7 +246,7 @@ func TestReserveUntilOutOfStock(t *testing.T) {
 	}
 	a.wantInventory(0, 3, 0)
 
-	code, body := a.do("POST", "/reserve", fmt.Sprintf(`{"sku":%q}`, a.sku))
+	code, body := a.do("POST", "/reserve", reserveBody(newOpID(), a.sku))
 	wantError(t, "4th reserve", code, http.StatusConflict, body, "out_of_stock")
 	a.wantInventory(0, 3, 0)
 }
@@ -273,14 +292,19 @@ func TestFinishedReservationCannotBeFinishedAgain(t *testing.T) {
 // Unknown SKUs and unknown reservation ids get 404, and nothing changes.
 func TestNotFound(t *testing.T) {
 	a := newTestAPI(t, 1)
+	const unknownID = "00000000-0000-0000-0000-000000000000"
+	// These operations target things that do not exist, so the per-SKU cleanup misses them.
+	t.Cleanup(func() {
+		a.pool.Exec(context.Background(),
+			`DELETE FROM operations WHERE request IN ('NO-SUCH-SKU', $1)`, unknownID)
+	})
 
-	code, body := a.do("POST", "/reserve", `{"sku":"NO-SUCH-SKU"}`)
+	code, body := a.do("POST", "/reserve", reserveBody(newOpID(), "NO-SUCH-SKU"))
 	wantError(t, "reserve", code, http.StatusNotFound, body, "sku_not_found")
 
 	code, body = a.do("GET", "/inventory/NO-SUCH-SKU", "")
 	wantError(t, "inventory", code, http.StatusNotFound, body, "sku_not_found")
 
-	const unknownID = "00000000-0000-0000-0000-000000000000"
 	for _, action := range []string{"confirm", "abandon"} {
 		code, body = a.finish(action, unknownID)
 		wantError(t, action, code, http.StatusNotFound, body, "reservation_not_found")
@@ -288,16 +312,19 @@ func TestNotFound(t *testing.T) {
 	a.wantInventory(1, 0, 0)
 }
 
-// Broken JSON, missing fields, and ids that are not UUIDs get 400,
+// Broken JSON, missing fields (including a missing operation_id), and ids that
+// are not UUIDs get 400,
 // and nothing changes.
 func TestInvalidRequest(t *testing.T) {
 	a := newTestAPI(t, 1)
 	requests := []struct{ path, body string }{
 		{"/reserve", `not json`},
 		{"/reserve", `{}`},
+		{"/reserve", `{"sku":"` + a.sku + `"}`}, // no operation_id
 		{"/confirm", `{}`},
-		{"/confirm", `{"reservation_id":"not-a-uuid"}`},
-		{"/abandon", `{"reservation_id":"not-a-uuid"}`},
+		{"/confirm", `{"reservation_id":"00000000-0000-0000-0000-000000000000"}`}, // no operation_id
+		{"/confirm", `{"operation_id":"x","reservation_id":"not-a-uuid"}`},
+		{"/abandon", `{"operation_id":"x","reservation_id":"not-a-uuid"}`},
 	}
 	for _, r := range requests {
 		code, body := a.do("POST", r.path, r.body)

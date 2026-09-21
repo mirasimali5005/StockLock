@@ -49,12 +49,14 @@ func countCodes(t *testing.T, results []result) map[int]int {
 	return counts
 }
 
+// reserveRequest and finishRequest each send a brand-new operation (fresh operation id),
+// so these are different shoppers competing, not one shopper retrying.
 func (a *testAPI) reserveRequest() (int, map[string]any, error) {
-	return a.request("POST", "/reserve", fmt.Sprintf(`{"sku":%q}`, a.sku))
+	return a.request("POST", "/reserve", reserveBody(newOpID(), a.sku))
 }
 
 func (a *testAPI) finishRequest(action, reservationID string) (int, map[string]any, error) {
-	return a.request("POST", "/"+action, fmt.Sprintf(`{"reservation_id":%q}`, reservationID))
+	return a.request("POST", "/"+action, finishBody(newOpID(), reservationID))
 }
 
 // wantReservationRows checks how many reservation rows the SKU has in a given state,

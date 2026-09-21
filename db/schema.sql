@@ -17,9 +17,15 @@ CREATE TABLE reservations (
     deadline       TIMESTAMPTZ NOT NULL
 );
 
--- One row per client operation identity, with the response that was returned for it.
+-- One row per client operation identity, with the answer that was given for it.
+-- A retry carrying the same operation_id gets this stored answer back instead of
+-- moving inventory again. The row commits in the same transaction as the inventory change.
 CREATE TABLE operations (
     operation_id   TEXT PRIMARY KEY,
     operation_type TEXT NOT NULL CHECK (operation_type IN ('RESERVE', 'CONFIRM', 'ABANDON')),
-    response       JSONB NOT NULL
+    -- What the operation targeted: the SKU for RESERVE, the reservation id otherwise.
+    request        TEXT NOT NULL,
+    -- NULL only inside the transaction that claimed the id; always set once committed.
+    status_code    INTEGER,
+    response       JSONB
 );
