@@ -69,10 +69,17 @@ const (
 )
 
 // timing carries the moments a mutation records on its way through a transaction.
+//
+// When the lock is taken by a separate SELECT ... FOR UPDATE, lockWait is that
+// statement's duration and lockAcquired is when it returned. When the lock is taken
+// inside the write itself, the two cannot be separated from the client: lockAcquired
+// is then the write's start (so critical_section includes any lock wait) and
+// lockWaitKnown is false.
 type timing struct {
-	kind         string
-	lockWait     time.Duration
-	lockAcquired time.Time
+	kind          string
+	lockWait      time.Duration
+	lockWaitKnown bool
+	lockAcquired  time.Time
 }
 
 func (s *server) routes() http.Handler {
@@ -91,6 +98,13 @@ type operation struct {
 	id      string
 	kind    string // RESERVE, CONFIRM, or ABANDON
 	request string // the SKU for RESERVE, the reservation id otherwise
+}
+
+// prestored is what a mutation returns when its own statement already wrote the
+// answer into the operations row, so runOnce must not write it again.
+type prestored struct {
+	status int
+	body   []byte
 }
 
 // runOnce executes mutate at most once per operation id and returns the HTTP status
@@ -142,62 +156,75 @@ func (s *server) runOnce(ctx context.Context, op operation, successStatus int,
 		}
 		result = map[string]string{"error": err.Error()}
 	}
-	body, err := json.Marshal(result)
-	if err != nil {
-		return 0, nil, err
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE operations SET status_code = $2, response = $3 WHERE operation_id = $1`,
-		op.id, status, body); err != nil {
-		return 0, nil, err
+	var body []byte
+	if p, ok := result.(prestored); ok {
+		status, body = p.status, p.body
+	} else {
+		if body, err = json.Marshal(result); err != nil {
+			return 0, nil, err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE operations SET status_code = $2, response = $3 WHERE operation_id = $1`,
+			op.id, status, body); err != nil {
+			return 0, nil, err
+		}
 	}
 	err = tx.Commit(ctx)
 	if err == nil && !tm.lockAcquired.IsZero() {
 		done := time.Now()
-		s.metrics.Record(tm.kind+timerLockWait, tm.lockWait)
+		if tm.lockWaitKnown {
+			s.metrics.Record(tm.kind+timerLockWait, tm.lockWait)
+		}
 		s.metrics.Record(tm.kind+timerCriticalSection, done.Sub(tm.lockAcquired))
 		s.metrics.Record(tm.kind+timerTransaction, done.Sub(began))
 	}
 	return status, body, err
 }
 
-type reservation struct {
-	ReservationID string    `json:"reservation_id"`
-	SKU           string    `json:"sku"`
-	Deadline      time.Time `json:"deadline"`
-}
-
-// reserve is deliberately the straightforward version: lock the stock row, read it,
-// decide in application code, then write. Each step is its own round trip, all made
-// while the row lock is held.
-func reserve(ctx context.Context, tx pgx.Tx, sku string, holdWindow time.Duration, tm *timing) (reservation, error) {
-	var available int
-	lockStart := time.Now()
-	err := tx.QueryRow(ctx, `SELECT available FROM stock WHERE sku = $1 FOR UPDATE`, sku).Scan(&available)
+// reserve takes one unit, records the reservation, and stores the answer for the
+// operation, all in one statement. The UPDATE locks the stock row and either applies
+// the change or matches nothing, atomically; the INSERT and the answer store run only
+// for a matched row. While the row is held there is just this statement and the
+// commit. (The baseline held it for SELECT ... FOR UPDATE, a Go-side check, UPDATE,
+// INSERT, and the answer store: four extra round trips.)
+//
+// No row back means either an unknown SKU or no stock; that is told apart on the
+// cold path with a plain SELECT, when no lock is held.
+func reserve(ctx context.Context, tx pgx.Tx, op operation, holdWindow time.Duration, tm *timing) (any, error) {
 	tm.lockAcquired = time.Now()
-	tm.lockWait = tm.lockAcquired.Sub(lockStart)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return reservation{}, errSKUNotFound
+	var body []byte
+	err := tx.QueryRow(ctx,
+		`WITH taken AS (
+		   UPDATE stock SET available = available - 1, reserved = reserved + 1
+		   WHERE sku = $1 AND available > 0
+		   RETURNING sku
+		 ), made AS (
+		   INSERT INTO reservations (sku, state, deadline)
+		   SELECT sku, 'RESERVED', now() + $2::interval FROM taken
+		   RETURNING reservation_id, sku, deadline
+		 ), stored AS (
+		   UPDATE operations o
+		   SET status_code = $4, response = jsonb_build_object(
+		         'reservation_id', m.reservation_id::text, 'sku', m.sku, 'deadline', m.deadline)
+		   FROM made m WHERE o.operation_id = $3
+		   RETURNING o.response
+		 )
+		 SELECT response FROM stored`,
+		op.request, holdWindow, op.id, http.StatusCreated).Scan(&body)
+	if err == nil {
+		return prestored{status: http.StatusCreated, body: body}, nil
 	}
-	if err != nil {
-		return reservation{}, err
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
 	}
-	if available <= 0 {
-		return reservation{}, errOutOfStock
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT true FROM stock WHERE sku = $1`, op.request).Scan(&exists); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errSKUNotFound
+		}
+		return nil, err
 	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE stock SET available = available - 1, reserved = reserved + 1 WHERE sku = $1`, sku); err != nil {
-		return reservation{}, err
-	}
-
-	r := reservation{SKU: sku}
-	err = tx.QueryRow(ctx,
-		`INSERT INTO reservations (sku, state, deadline)
-		 VALUES ($1, 'RESERVED', now() + $2::interval)
-		 RETURNING reservation_id::text, deadline`,
-		sku, holdWindow).Scan(&r.ReservationID, &r.Deadline)
-	return r, err
+	return nil, errOutOfStock
 }
 
 // Where a held unit goes when its reservation is finished.
@@ -220,6 +247,7 @@ func finish(ctx context.Context, tx pgx.Tx, id pgtype.UUID, newState, stockSQL s
 		`SELECT sku, state FROM reservations WHERE reservation_id = $1 FOR UPDATE`, id).Scan(&sku, &state)
 	tm.lockAcquired = time.Now()
 	tm.lockWait = tm.lockAcquired.Sub(lockStart)
+	tm.lockWaitKnown = true
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errReservationNotFound
 	}
@@ -259,7 +287,7 @@ func (s *server) handleReserve(w http.ResponseWriter, r *http.Request) {
 	}
 	op := operation{id: req.OperationID, kind: "RESERVE", request: req.SKU}
 	status, body, err := s.runOnce(r.Context(), op, http.StatusCreated, func(tx pgx.Tx, tm *timing) (any, error) {
-		return reserve(r.Context(), tx, req.SKU, s.holdWindow, tm)
+		return reserve(r.Context(), tx, op, s.holdWindow, tm)
 	})
 	writeOutcome(w, status, body, err)
 }

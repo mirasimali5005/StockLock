@@ -69,7 +69,7 @@ for vus in $LEVELS; do
     go run ./cmd/checker
     stop_api
     [ -n "$api_log_copy" ] && cp "$API_LOG" "$api_log_copy"
-    grep -c 'internal error' "$API_LOG" | sed 's/^/api internal errors: /' 
+    echo "api internal errors: $(grep -c 'internal error' "$API_LOG" || true)"
     echo
   done
 done

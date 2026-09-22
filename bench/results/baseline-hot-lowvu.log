@@ -1,0 +1,92 @@
+commit 24cef85  duration=15s repeats=3 pool=20 stock=1000000
+
+=== VUs=1 run 1/3
+
+requests:      15736  (1049.0 req/s)
+reserved 201:  15736
+refused  409:  0
+failed other:  0
+latency ms:    p50=0.88  p95=1.08  p99=1.87  max=28.0
+server-side timers (ms):
+  RESERVE.critical_section     n=15736   mean=0.552  p50=0.521  p95=0.691  p99=1.081  max=26.9
+  RESERVE.lock_wait            n=15736   mean=0.109  p50=0.105  p95=0.128  p99=0.207  max=1.7
+  RESERVE.transaction          n=15736   mean=0.879  p50=0.837  p95=1.025  p99=1.767  max=27.7
+reservation rows in db: 15736
+OK: 2 SKU(s) checked, all invariants hold
+api internal errors: 0
+
+=== VUs=1 run 2/3
+
+requests:      16134  (1075.5 req/s)
+reserved 201:  16134
+refused  409:  0
+failed other:  0
+latency ms:    p50=0.86  p95=1.06  p99=1.86  max=10.8
+server-side timers (ms):
+  RESERVE.critical_section     n=16134   mean=0.538  p50=0.514  p95=0.682  p99=1.069  max=5.8
+  RESERVE.lock_wait            n=16134   mean=0.106  p50=0.102  p95=0.126  p99=0.205  max=1.2
+  RESERVE.transaction          n=16134   mean=0.856  p50=0.822  p95=1.010  p99=1.741  max=10.6
+reservation rows in db: 16134
+OK: 2 SKU(s) checked, all invariants hold
+api internal errors: 0
+
+=== VUs=1 run 3/3
+
+requests:      16143  (1076.1 req/s)
+reserved 201:  16143
+refused  409:  0
+failed other:  0
+latency ms:    p50=0.85  p95=1.06  p99=1.90  max=35.3
+server-side timers (ms):
+  RESERVE.critical_section     n=16143   mean=0.540  p50=0.511  p95=0.681  p99=1.093  max=34.4
+  RESERVE.lock_wait            n=16143   mean=0.105  p50=0.100  p95=0.124  p99=0.207  max=18.6
+  RESERVE.transaction          n=16143   mean=0.856  p50=0.815  p95=1.007  p99=1.792  max=35.3
+reservation rows in db: 16143
+OK: 2 SKU(s) checked, all invariants hold
+api internal errors: 0
+
+=== VUs=2 run 1/3
+
+requests:      24768  (1651.1 req/s)
+reserved 201:  24768
+refused  409:  0
+failed other:  0
+latency ms:    p50=1.13  p95=1.42  p99=2.49  max=15.4
+server-side timers (ms):
+  RESERVE.critical_section     n=24768   mean=0.594  p50=0.567  p95=0.761  p99=1.186  max=6.8
+  RESERVE.lock_wait            n=24768   mean=0.293  p50=0.277  p95=0.435  p99=0.644  max=6.0
+  RESERVE.transaction          n=24768   mean=1.129  p50=1.081  p95=1.356  p99=2.392  max=15.0
+reservation rows in db: 24768
+OK: 2 SKU(s) checked, all invariants hold
+api internal errors: 0
+
+=== VUs=2 run 2/3
+
+requests:      24426  (1628.3 req/s)
+reserved 201:  24426
+refused  409:  0
+failed other:  0
+latency ms:    p50=1.13  p95=1.48  p99=2.80  max=20.6
+server-side timers (ms):
+  RESERVE.critical_section     n=24426   mean=0.604  p50=0.567  p95=0.791  p99=1.326  max=12.6
+  RESERVE.lock_wait            n=24426   mean=0.297  p50=0.275  p95=0.447  p99=0.785  max=8.1
+  RESERVE.transaction          n=24426   mean=1.144  p50=1.079  p95=1.415  p99=2.702  max=20.0
+reservation rows in db: 24426
+OK: 2 SKU(s) checked, all invariants hold
+api internal errors: 0
+
+=== VUs=2 run 3/3
+
+requests:      24721  (1647.9 req/s)
+reserved 201:  24721
+refused  409:  0
+failed other:  0
+latency ms:    p50=1.14  p95=1.42  p99=2.48  max=14.4
+server-side timers (ms):
+  RESERVE.critical_section     n=24721   mean=0.597  p50=0.570  p95=0.764  p99=1.142  max=6.2
+  RESERVE.lock_wait            n=24721   mean=0.292  p50=0.277  p95=0.433  p99=0.616  max=5.8
+  RESERVE.transaction          n=24721   mean=1.131  p50=1.086  p95=1.353  p99=2.397  max=13.8
+reservation rows in db: 24721
+OK: 2 SKU(s) checked, all invariants hold
+api internal errors: 0
+
