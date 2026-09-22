@@ -1,5 +1,6 @@
 // Command sweeper periodically expires reservations whose deadline has passed and
-// returns their units to available stock. It runs until interrupted.
+// returns their units to available stock. It runs until interrupted, or sweeps once
+// and exits when SWEEP_ONCE is set.
 package main
 
 import (
@@ -51,6 +52,15 @@ func main() {
 	defer pool.Close()
 	if err := pool.Ping(ctx); err != nil {
 		log.Fatal(err)
+	}
+
+	if os.Getenv("SWEEP_ONCE") != "" {
+		n, err := sweep.Drain(ctx, pool, batch)
+		if err != nil {
+			log.Fatalf("sweep: %v", err)
+		}
+		log.Printf("expired %d reservation(s)", n)
+		return
 	}
 
 	log.Printf("sweeping every %v, batch %d", interval, batch)

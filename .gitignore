@@ -3,3 +3,6 @@ CLAUDE.md
 DECISIONS.md
 .claude/
 bench/api
+bench/sweeper
+bench/verify
+bench/results/adversarial-out/

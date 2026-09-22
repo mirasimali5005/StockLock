@@ -1,0 +1,19 @@
+commit 5191c95  vus=1000 duration=5s+55s stock=50 hold=3s sweeper=on pool=20
+events recorded: 136884   api internal errors: 0   sweeper errors: 0
+  abandon -> 200                           25
+  confirm -> 200                           75
+  confirm -> 409                           30
+  events                                   136884
+  final available                          0
+  final reserved                           0
+  final sold                               50
+  operation rows                           57821
+  operations sent more than once           8807
+  reservation rows                         125
+  reservations ending ABANDONED            25
+  reservations ending CONFIRMED            50
+  reservations ending EXPIRED              50
+  reserve -> 201                           296
+  reserve -> 409                           136458
+  successful reserve operations            125
+VERIFY OK: every answer shoppers received agrees with the database
