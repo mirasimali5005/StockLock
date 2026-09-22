@@ -1,0 +1,219 @@
+commit 8d25ebd  duration=30s repeats=3 pool=20 stock=1000000
+
+=== VUs=10 run 1/3
+
+requests:      44271  (1475.4 req/s)
+reserved 201:  44271
+refused  409:  0
+failed other:  0
+latency ms:    p50=2.02  p95=30.14  p99=55.86  max=199.3
+server-side timers (ms):
+  RESERVE.critical_section     n=44271   mean=0.659  p50=0.615  p95=0.891  p99=1.228  max=14.0
+  RESERVE.lock_wait            n=44271   mean=5.755  p50=1.034  p95=29.060  p99=54.833  max=198.0
+  RESERVE.transaction          n=44271   mean=6.673  p50=1.957  p95=30.060  p99=55.762  max=199.2
+reservation rows in db: 44271
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=10 run 2/3
+
+requests:      41858  (1395.0 req/s)
+reserved 201:  41858
+refused  409:  0
+failed other:  0
+latency ms:    p50=2.09  p95=30.33  p99=57.67  max=307.8
+server-side timers (ms):
+  RESERVE.critical_section     n=41858   mean=0.697  p50=0.624  p95=0.994  p99=1.561  max=196.4
+  RESERVE.lock_wait            n=41858   mean=6.077  p50=1.052  p95=29.240  p99=56.506  max=306.8
+  RESERVE.transaction          n=41858   mean=7.055  p50=2.018  p95=30.275  p99=57.573  max=307.7
+reservation rows in db: 41858
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=10 run 3/3
+
+requests:      45317  (1510.3 req/s)
+reserved 201:  45317
+refused  409:  0
+failed other:  0
+latency ms:    p50=1.92  p95=28.64  p99=52.40  max=160.8
+server-side timers (ms):
+  RESERVE.critical_section     n=45317   mean=0.644  p50=0.605  p95=0.817  p99=1.312  max=32.7
+  RESERVE.lock_wait            n=45317   mean=5.617  p50=0.983  p95=27.656  p99=51.063  max=159.9
+  RESERVE.transaction          n=45317   mean=6.520  p50=1.851  p95=28.584  p99=52.362  max=160.8
+reservation rows in db: 45317
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=100 run 1/3
+
+requests:      40394  (1343.3 req/s)
+reserved 201:  40394
+refused  409:  0
+failed other:  0
+latency ms:    p50=69.28  p95=108.67  p99=138.42  max=308.9
+server-side timers (ms):
+  RESERVE.critical_section     n=40394   mean=0.742  p50=0.690  p95=0.977  p99=1.544  max=31.9
+  RESERVE.lock_wait            n=40394   mean=13.790  p50=9.698  p95=40.147  p99=64.628  max=235.1
+  RESERVE.transaction          n=40394   mean=74.215  p50=69.200  p95=108.536  p99=138.306  max=308.8
+reservation rows in db: 40394
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=100 run 2/3
+
+requests:      39443  (1312.0 req/s)
+reserved 201:  39443
+refused  409:  0
+failed other:  0
+latency ms:    p50=70.02  p95=112.55  p99=158.11  max=354.8
+server-side timers (ms):
+  RESERVE.critical_section     n=39443   mean=0.760  p50=0.694  p95=1.047  p99=1.750  max=89.6
+  RESERVE.lock_wait            n=39443   mean=14.103  p50=9.764  p95=41.489  p99=66.493  max=245.1
+  RESERVE.transaction          n=39443   mean=75.987  p50=69.938  p95=112.441  p99=157.955  max=354.7
+reservation rows in db: 39443
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=100 run 3/3
+
+requests:      42400  (1410.4 req/s)
+reserved 201:  42400
+refused  409:  0
+failed other:  0
+latency ms:    p50=66.55  p95=99.07  p99=122.55  max=239.2
+server-side timers (ms):
+  RESERVE.critical_section     n=42400   mean=0.708  p50=0.677  p95=0.834  p99=1.350  max=34.8
+  RESERVE.lock_wait            n=42400   mean=13.136  p50=9.287  p95=38.048  p99=59.467  max=183.3
+  RESERVE.transaction          n=42400   mean=70.696  p50=66.479  p95=98.967  p99=122.463  max=239.1
+reservation rows in db: 42400
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=1000 run 1/3
+
+requests:      43965  (1433.8 req/s)
+reserved 201:  43965
+refused  409:  0
+failed other:  0
+latency ms:    p50=688.20  p95=745.48  p99=804.00  max=896.1
+server-side timers (ms):
+  RESERVE.critical_section     n=43965   mean=0.697  p50=0.672  p95=0.812  p99=1.276  max=19.7
+  RESERVE.lock_wait            n=43965   mean=12.908  p50=9.195  p95=37.261  p99=57.490  max=143.5
+  RESERVE.transaction          n=43965   mean=689.093  p50=688.115  p95=745.380  p99=803.931  max=896.0
+reservation rows in db: 43965
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=1000 run 2/3
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+time="2026-09-21T22:26:23-04:00" level=warning msg="Request Failed" error="Post \"http://localhost:8081/reserve\": dial tcp 127.0.0.1:8081: connect: connection reset by peer"
+
+requests:      44360  (1446.3 req/s)
+reserved 201:  44269
+refused  409:  0
+failed other:  91
+latency ms:    p50=685.97  p95=733.23  p99=784.47  max=894.9
+server-side timers (ms):
+  RESERVE.critical_section     n=44269   mean=0.692  p50=0.670  p95=0.791  p99=1.106  max=14.6
+  RESERVE.lock_wait            n=44269   mean=12.821  p50=9.081  p95=37.217  p99=56.569  max=135.7
+  RESERVE.transaction          n=44269   mean=683.813  p50=685.947  p95=733.185  p99=784.414  max=894.8
+reservation rows in db: 44269
+OK: 2 SKU(s) checked, all invariants hold
+
+=== VUs=1000 run 3/3
+
+requests:      42894  (1397.2 req/s)
+reserved 201:  42894
+refused  409:  0
+failed other:  0
+latency ms:    p50=693.97  p95=892.47  p99=1116.93  max=1218.5
+server-side timers (ms):
+  RESERVE.critical_section     n=42894   mean=0.716  p50=0.677  p95=0.862  p99=1.484  max=37.3
+  RESERVE.lock_wait            n=42894   mean=13.254  p50=9.404  p95=38.053  p99=60.041  max=264.9
+  RESERVE.transaction          n=42894   mean=706.741  p50=693.892  p95=892.276  p99=1116.844  max=1218.4
+reservation rows in db: 42894
+OK: 2 SKU(s) checked, all invariants hold
+

@@ -8,16 +8,19 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"stocklock/internal/metrics"
 )
 
 const (
 	defaultDatabaseURL = "postgres://stocklock:stocklock@localhost:5432/stocklock"
-	listenAddr         = ":8080"
+	defaultListenAddr  = ":8080"
 
 	// defaultHoldWindow is how long a reservation stays valid unless HOLD_WINDOW says otherwise.
 	defaultHoldWindow = 5 * time.Minute
@@ -51,6 +54,25 @@ func definiteStatus(err error) (int, bool) {
 type server struct {
 	pool       *pgxpool.Pool
 	holdWindow time.Duration
+	metrics    metrics.Registry
+}
+
+// Timer names, suffixed with the operation kind (e.g. "reserve.critical_section").
+//
+//	lock_wait:        the SELECT ... FOR UPDATE statement, i.e. queueing for the row lock
+//	critical_section: row lock acquired -> commit returned, how long the row is held
+//	transaction:      BEGIN -> commit returned
+const (
+	timerLockWait        = ".lock_wait"
+	timerCriticalSection = ".critical_section"
+	timerTransaction     = ".transaction"
+)
+
+// timing carries the moments a mutation records on its way through a transaction.
+type timing struct {
+	kind         string
+	lockWait     time.Duration
+	lockAcquired time.Time
 }
 
 func (s *server) routes() http.Handler {
@@ -59,6 +81,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /confirm", s.handleConfirm)
 	mux.HandleFunc("POST /abandon", s.handleAbandon)
 	mux.HandleFunc("GET /inventory/{sku}", s.handleInventory)
+	mux.HandleFunc("GET /stats", s.handleStats)
+	mux.HandleFunc("POST /stats/reset", s.handleStatsReset)
 	return mux
 }
 
@@ -78,8 +102,10 @@ type operation struct {
 // commits we replay its stored answer, and if it rolls back we take over as the
 // first attempt.
 func (s *server) runOnce(ctx context.Context, op operation, successStatus int,
-	mutate func(tx pgx.Tx) (any, error)) (int, []byte, error) {
+	mutate func(tx pgx.Tx, tm *timing) (any, error)) (int, []byte, error) {
 
+	began := time.Now()
+	tm := timing{kind: op.kind}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, nil, err
@@ -108,7 +134,7 @@ func (s *server) runOnce(ctx context.Context, op operation, successStatus int,
 	}
 
 	status := successStatus
-	result, err := mutate(tx)
+	result, err := mutate(tx, &tm)
 	if err != nil {
 		var definite bool
 		if status, definite = definiteStatus(err); !definite {
@@ -125,7 +151,14 @@ func (s *server) runOnce(ctx context.Context, op operation, successStatus int,
 		op.id, status, body); err != nil {
 		return 0, nil, err
 	}
-	return status, body, tx.Commit(ctx)
+	err = tx.Commit(ctx)
+	if err == nil && !tm.lockAcquired.IsZero() {
+		done := time.Now()
+		s.metrics.Record(tm.kind+timerLockWait, tm.lockWait)
+		s.metrics.Record(tm.kind+timerCriticalSection, done.Sub(tm.lockAcquired))
+		s.metrics.Record(tm.kind+timerTransaction, done.Sub(began))
+	}
+	return status, body, err
 }
 
 type reservation struct {
@@ -137,9 +170,12 @@ type reservation struct {
 // reserve is deliberately the straightforward version: lock the stock row, read it,
 // decide in application code, then write. Each step is its own round trip, all made
 // while the row lock is held.
-func reserve(ctx context.Context, tx pgx.Tx, sku string, holdWindow time.Duration) (reservation, error) {
+func reserve(ctx context.Context, tx pgx.Tx, sku string, holdWindow time.Duration, tm *timing) (reservation, error) {
 	var available int
+	lockStart := time.Now()
 	err := tx.QueryRow(ctx, `SELECT available FROM stock WHERE sku = $1 FOR UPDATE`, sku).Scan(&available)
+	tm.lockAcquired = time.Now()
+	tm.lockWait = tm.lockAcquired.Sub(lockStart)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return reservation{}, errSKUNotFound
 	}
@@ -177,10 +213,13 @@ const (
 // after the row lock is held. now() would be wrong here: it is frozen at transaction
 // start, so a request that started before the deadline but waited on the lock past
 // it would still be allowed through.
-func finish(ctx context.Context, tx pgx.Tx, id pgtype.UUID, newState, stockSQL string) error {
+func finish(ctx context.Context, tx pgx.Tx, id pgtype.UUID, newState, stockSQL string, tm *timing) error {
 	var sku, state string
+	lockStart := time.Now()
 	err := tx.QueryRow(ctx,
 		`SELECT sku, state FROM reservations WHERE reservation_id = $1 FOR UPDATE`, id).Scan(&sku, &state)
+	tm.lockAcquired = time.Now()
+	tm.lockWait = tm.lockAcquired.Sub(lockStart)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errReservationNotFound
 	}
@@ -219,8 +258,8 @@ func (s *server) handleReserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op := operation{id: req.OperationID, kind: "RESERVE", request: req.SKU}
-	status, body, err := s.runOnce(r.Context(), op, http.StatusCreated, func(tx pgx.Tx) (any, error) {
-		return reserve(r.Context(), tx, req.SKU, s.holdWindow)
+	status, body, err := s.runOnce(r.Context(), op, http.StatusCreated, func(tx pgx.Tx, tm *timing) (any, error) {
+		return reserve(r.Context(), tx, req.SKU, s.holdWindow, tm)
 	})
 	writeOutcome(w, status, body, err)
 }
@@ -247,8 +286,8 @@ func (s *server) handleFinish(w http.ResponseWriter, r *http.Request, kind, newS
 	// The canonical text form, so differently written copies of one UUID compare equal.
 	reservationID, _ := id.Value()
 	op := operation{id: req.OperationID, kind: kind, request: reservationID.(string)}
-	status, body, err := s.runOnce(r.Context(), op, http.StatusOK, func(tx pgx.Tx) (any, error) {
-		if err := finish(r.Context(), tx, id, newState, stockSQL); err != nil {
+	status, body, err := s.runOnce(r.Context(), op, http.StatusOK, func(tx pgx.Tx, tm *timing) (any, error) {
+		if err := finish(r.Context(), tx, id, newState, stockSQL, tm); err != nil {
 			return nil, err
 		}
 		return map[string]string{"reservation_id": op.request, "state": newState}, nil
@@ -275,6 +314,15 @@ func (s *server) handleInventory(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, inv)
 	}
+}
+
+func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.metrics.Summaries())
+}
+
+func (s *server) handleStatsReset(w http.ResponseWriter, r *http.Request) {
+	s.metrics.Reset()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeOutcome sends what runOnce decided: a first or replayed answer, or a failure.
@@ -314,7 +362,18 @@ func main() {
 			log.Fatalf("HOLD_WINDOW %q: want a positive duration such as 5m or 2s", v)
 		}
 	}
-	pool, err := pgxpool.New(context.Background(), url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if v := os.Getenv("DB_MAX_CONNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			log.Fatalf("DB_MAX_CONNS %q: want a positive integer", v)
+		}
+		cfg.MaxConns = int32(n)
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -322,7 +381,11 @@ func main() {
 	if err := pool.Ping(context.Background()); err != nil {
 		log.Fatal(err)
 	}
+	listenAddr := defaultListenAddr
+	if v := os.Getenv("LISTEN_ADDR"); v != "" {
+		listenAddr = v
+	}
 
-	log.Printf("listening on %s, hold window %v", listenAddr, holdWindow)
+	log.Printf("listening on %s, hold window %v, pool max %d", listenAddr, holdWindow, cfg.MaxConns)
 	log.Fatal(http.ListenAndServe(listenAddr, (&server{pool: pool, holdWindow: holdWindow}).routes()))
 }
