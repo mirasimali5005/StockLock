@@ -187,7 +187,12 @@ func finish(ctx context.Context, tx pgx.Tx, id pgtype.UUID, newState, stockSQL s
 	if err != nil {
 		return err
 	}
-	if state != "RESERVED" {
+	switch state {
+	case "RESERVED":
+	case "EXPIRED":
+		// The sweeper got here first. Same answer as arriving late ourselves.
+		return errExpired
+	default:
 		return errNotReserved
 	}
 
